@@ -2,57 +2,77 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import * as satellite from "satellite.js";
+
 interface ThreeEarthProps {
   satellites: { name: string; tle1: string; tle2: string }[];
 }
 
+const createScene = (container: HTMLDivElement) => {
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(
+    75,
+    container.clientWidth / container.clientHeight,
+    0.1,
+    1000
+  );
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  container.appendChild(renderer.domElement);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  camera.position.set(20, 15, 20);
+  controls.update();
+
+  return { scene, camera, renderer, controls };
+};
+
+const createEarth = (showNightLights: boolean): THREE.Mesh => {
+  const earthGeometry = new THREE.SphereGeometry(10, 64, 64);
+  const earthMaterial = new THREE.MeshStandardMaterial({
+    map: new THREE.TextureLoader().load("/assets/Albedo.jpg"),
+    bumpMap: new THREE.TextureLoader().load("/assets/Bump.jpg"),
+    bumpScale: 0.03,
+    emissiveMap: showNightLights
+      ? new THREE.TextureLoader().load("/assets/night_lights_modified.png")
+      : null,
+  });
+  return new THREE.Mesh(earthGeometry, earthMaterial);
+};
+
 const ThreeEarth: React.FC<ThreeEarthProps> = ({ satellites }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [showNightLights, setShowNightLights] = useState(false);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
+  const earthRef = useRef<THREE.Mesh | null>(null);
+  const sliderValueRef = useRef(1);
+  const showNightLights = false;
   const [simulationTime, setSimulationTime] = useState(new Date());
   const [selectedSatellite, setSelectedSatellite] = useState<{
     name: string;
     tle1: string;
     tle2: string;
   } | null>(null);
-  const [orbitLine, setOrbitLine] = useState<THREE.Line | null>(null);
 
   useEffect(() => {
     if (!containerRef.current || satellites.length === 0) return;
 
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(
-      75,
-      containerRef.current.clientWidth / containerRef.current.clientHeight,
-      0.1,
-      1000
+    const { scene, camera, renderer, controls } = createScene(
+      containerRef.current
     );
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(
-      containerRef.current.clientWidth,
-      containerRef.current.clientHeight
-    );
-    containerRef.current.appendChild(renderer.domElement);
+
+    sceneRef.current = scene;
+    cameraRef.current = camera;
+    rendererRef.current = renderer;
+    controlsRef.current = controls;
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 2);
     const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
     directionalLight.position.set(50, 50, 50);
     scene.add(ambientLight, directionalLight);
 
-    const controls = new OrbitControls(camera, renderer.domElement);
-    camera.position.set(20, 15, 20);
-    controls.update();
-
-    const earthGeometry = new THREE.SphereGeometry(10, 64, 64);
-    const earthMaterial = new THREE.MeshStandardMaterial({
-      map: new THREE.TextureLoader().load("/assets/Albedo.jpg"),
-      bumpMap: new THREE.TextureLoader().load("/assets/Bump.jpg"),
-      bumpScale: 0.03,
-      emissiveMap: showNightLights
-        ? new THREE.TextureLoader().load("/assets/night_lights_modified.png")
-        : null,
-    });
-    const earth = new THREE.Mesh(earthGeometry, earthMaterial);
+    const earth = createEarth(showNightLights);
     scene.add(earth);
 
     const satelliteMeshes: THREE.InstancedMesh = new THREE.InstancedMesh(
@@ -62,8 +82,7 @@ const ThreeEarth: React.FC<ThreeEarthProps> = ({ satellites }) => {
     );
     scene.add(satelliteMeshes);
 
-    let currentOrbitLine: THREE.Line | null = null; // Track the orbit line
-
+    let currentOrbitLine: THREE.Line | null = null;
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
@@ -80,15 +99,12 @@ const ThreeEarth: React.FC<ThreeEarthProps> = ({ satellites }) => {
         if (instanceId !== undefined) {
           setSelectedSatellite(satellites[instanceId]);
 
-          // Remove old orbit line if it exists
           if (currentOrbitLine) {
             scene.remove(currentOrbitLine);
             currentOrbitLine.geometry.dispose();
-            currentOrbitLine.material.dispose();
             currentOrbitLine = null;
           }
 
-          // Add new orbit line
           const orbit = calculateOrbit(satellites[instanceId]);
           scene.add(orbit);
           currentOrbitLine = orbit;
@@ -96,20 +112,29 @@ const ThreeEarth: React.FC<ThreeEarthProps> = ({ satellites }) => {
       }
     };
 
+    let simulationTimeVar = new Date(simulationTime);
+
     const animate = () => {
-      requestAnimationFrame(animate);
+      const timeIncrement = (sliderValueRef.current * 1000) / 60;
+      simulationTimeVar = new Date(simulationTimeVar.getTime() + timeIncrement);
+
+      setSimulationTime(new Date(simulationTimeVar));
+
       satellites.forEach((satelliteData, index) => {
         const satrec = satellite.twoline2satrec(
           satelliteData.tle1,
           satelliteData.tle2
         );
-        const positionAndVelocity = satellite.propagate(satrec, simulationTime);
-
+        const positionAndVelocity = satellite.propagate(
+          satrec,
+          simulationTimeVar
+        );
         if (
           positionAndVelocity.position &&
           typeof positionAndVelocity.position !== "boolean"
         ) {
           const positionEci = positionAndVelocity.position;
+
           const scale = 10 / 6371;
           const x = positionEci.x * scale;
           const y = positionEci.y * scale;
@@ -123,6 +148,8 @@ const ThreeEarth: React.FC<ThreeEarthProps> = ({ satellites }) => {
 
       controls.update();
       renderer.render(scene, camera);
+
+      requestAnimationFrame(animate);
     };
 
     animate();
@@ -130,12 +157,22 @@ const ThreeEarth: React.FC<ThreeEarthProps> = ({ satellites }) => {
 
     return () => {
       renderer.dispose();
+      containerRef.current?.removeChild(renderer.domElement);
+      scene.clear();
+      sceneRef.current = null;
+      cameraRef.current = null;
+      rendererRef.current = null;
+      controlsRef.current = null;
+      earthRef.current = null;
+      renderer.domElement.removeEventListener("click", handleMouseClick);
+      //remove the canvas
+      renderer.domElement.remove();
       if (currentOrbitLine) {
         scene.remove(currentOrbitLine);
         currentOrbitLine.geometry.dispose();
       }
     };
-  }, [showNightLights, simulationTime, satellites]);
+  }, []);
 
   const calculateOrbit = (satelliteData: {
     tle1: string;
@@ -147,10 +184,9 @@ const ThreeEarth: React.FC<ThreeEarthProps> = ({ satellites }) => {
     );
     const points: THREE.Vector3[] = [];
 
-    const timeForAFullOrbit = (2.0 * Math.PI) / satrec.no; // Time in minutes for a full orbit
-    // Calculate positions over 90 minutes relative to simulationTime
+    const timeForAFullOrbit = (2.0 * Math.PI) / satrec.no;
     for (let i = 0; i < timeForAFullOrbit * 60; i += 60) {
-      const time = new Date(simulationTime.getTime() + i * 1000); // Orbit times relative to simulationTime
+      const time = new Date(simulationTime.getTime() + i * 1000);
       const positionAndVelocity = satellite.propagate(satrec, time);
 
       if (
@@ -159,8 +195,7 @@ const ThreeEarth: React.FC<ThreeEarthProps> = ({ satellites }) => {
       ) {
         const positionEci = positionAndVelocity.position;
 
-        // Scale and transform ECI coordinates into the 3D space
-        const scale = 10 / 6371; // Earth radius scaling factor
+        const scale = 10 / 6371;
         const x = positionEci.x * scale;
         const y = positionEci.y * scale;
         const z = positionEci.z * scale;
@@ -177,32 +212,15 @@ const ThreeEarth: React.FC<ThreeEarthProps> = ({ satellites }) => {
   return (
     <div style={{ height: "100vh", position: "relative" }}>
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
-      <button
-        onClick={() => setShowNightLights(!showNightLights)}
-        style={{
-          position: "absolute",
-          bottom: "20px",
-          left: "20px",
-          padding: "10px 20px",
-          backgroundColor: "#007bff",
-          color: "white",
-          border: "none",
-          borderRadius: "5px",
-          cursor: "pointer",
-        }}
-      >
-        Toggle Night Lights
-      </button>
+
       <input
         type="range"
         min="1"
-        max="100"
-        defaultValue="1"
-        onChange={(e) =>
-          setSimulationTime(
-            new Date(new Date().getTime() + parseInt(e.target.value) * 60000)
-          )
-        }
+        max="500"
+        defaultValue={sliderValueRef.current}
+        onChange={(e) => {
+          sliderValueRef.current = parseInt(e.target.value, 10);
+        }}
         style={{
           position: "absolute",
           bottom: "20px",

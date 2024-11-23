@@ -14,8 +14,20 @@ const Home = () => {
     const loadSatellites = async () => {
       try {
         const data = await fetchSatelliteTLEs();
-
-        setSatellites(data.slice(0, 100));
+        const collidableSatellites = [
+          {
+            name: "Satellite 1",
+            tle1: "1 00001U 20000A   24001.00000000  .00000000  00000-0  00000-0 0  9999",
+            tle2: "2 00001  10.0000  10.0000 0001000  90.0000 270.0000 15.00000000    00",
+          },
+          {
+            name: "Satellite 2",
+            tle1: "1 00002U 20000B   24001.00000000  .00000000  00000-0  00000-0 0  9999",
+            tle2: "2 00002  10.0000 190.0000 0001000 270.0000  90.0000 15.00000000    01",
+          },
+        ];
+        const newSatellites = data.slice(0, 1).concat(collidableSatellites);
+        setSatellites(newSatellites);
       } catch (error) {
         console.error("Error loading satellites:", error);
       } finally {
