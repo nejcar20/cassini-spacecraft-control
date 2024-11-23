@@ -9,24 +9,15 @@ const Home = () => {
     { name: string; tle1: string; tle2: string }[]
   >([]);
   const [loading, setLoading] = useState(true);
+  const [triggerZoom, setTriggerZoom] = useState(false);
 
   useEffect(() => {
     const loadSatellites = async () => {
       try {
         const data = await fetchSatelliteTLEs();
-        const collidableSatellites = [
-          {
-            name: "Satellite 1",
-            tle1: "1 00001U 20000A   24001.00000000  .00000000  00000-0  00000-0 0  9999",
-            tle2: "2 00001  10.0000  10.0000 0001000  90.0000 270.0000 15.00000000    00",
-          },
-          {
-            name: "Satellite 2",
-            tle1: "1 00002U 20000B   24001.00000000  .00000000  00000-0  00000-0 0  9999",
-            tle2: "2 00002  10.0000 190.0000 0001000 270.0000  90.0000 15.00000000    01",
-          },
-        ];
-        const newSatellites = data.slice(0, 1).concat(collidableSatellites);
+
+        const newSatellites = data.slice(0, 100);
+
         setSatellites(newSatellites);
       } catch (error) {
         console.error("Error loading satellites:", error);
@@ -36,12 +27,20 @@ const Home = () => {
     };
     loadSatellites();
   }, []);
-  console.log(satellites);
   return (
     <div style={{ display: "flex", height: "100vh" }}>
       <div style={{ width: "70%", height: "100%" }}>
         {loading && <p>Loading...</p>}
-        {!loading && <ThreeScene satellites={satellites} />}
+        {!loading && (
+          <ThreeScene
+            satellites={satellites}
+            satellitesOfInterest={["SURCAL 150B"]}
+            satellitesOfSecondaryInterest={["CALSPHERE 1", "CALSPHERE 4A"]}
+            ofInterestColor="#ff0000"
+            ofSecondaryInterestColor="#ffa500"
+            triggerZoom={triggerZoom}
+          />
+        )}
       </div>
       <div
         style={{
@@ -54,6 +53,9 @@ const Home = () => {
       >
         <h1>Satellite Tracker</h1>
         <p>Details will go here.</p>
+        <button onClick={() => setTriggerZoom(!triggerZoom)}>
+          Zoom to Interest
+        </button>
       </div>
     </div>
   );
