@@ -39,7 +39,7 @@ export const fetchSatelliteTLEs = async (): Promise<SatelliteTLE[]> => {
     }
 
     // Cache the data for 1 hour
-    setCachedData(SATELLITE_CACHE_KEY, satellites, 60);
+    setCachedData(SATELLITE_CACHE_KEY, satellites, 120);
     console.log("Satellite data cached.");
 
     return satellites;

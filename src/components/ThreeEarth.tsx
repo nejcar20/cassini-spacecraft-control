@@ -1,216 +1,178 @@
-"use client";
-
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import * as satellite from "satellite.js";
-import { SatelliteTLE } from "../utils/fetchSatellites";
-
 interface ThreeEarthProps {
-  satellites: SatelliteTLE[];
+  satellites: { name: string; tle1: string; tle2: string }[];
 }
 
 const ThreeEarth: React.FC<ThreeEarthProps> = ({ satellites }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [showNightLights, setShowNightLights] = useState(false);
-  const [selectedSatellite, setSelectedSatellite] = useState<string | null>(
-    null
-  );
-  const [loading, setLoading] = useState(true); // Add loading state
+  const [simulationTime, setSimulationTime] = useState(new Date());
+  const [selectedSatellite, setSelectedSatellite] = useState<{
+    name: string;
+    tle1: string;
+    tle2: string;
+  } | null>(null);
+  const [orbitLine, setOrbitLine] = useState<THREE.Line | null>(null);
 
-  const run = () => {
-    if (!containerRef.current) return;
-    if (!satellites || satellites.length === 0) return;
+  useEffect(() => {
+    if (!containerRef.current || satellites.length === 0) return;
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(
       75,
-      containerRef.current!.clientWidth / containerRef.current!.clientHeight,
+      containerRef.current.clientWidth / containerRef.current.clientHeight,
       0.1,
       1000
     );
-    const renderer = new THREE.WebGLRenderer();
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(
       containerRef.current.clientWidth,
       containerRef.current.clientHeight
     );
     containerRef.current.appendChild(renderer.domElement);
 
-    // Raycaster for interactivity
-    const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
+    const ambientLight = new THREE.AmbientLight(0xffffff, 2);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    directionalLight.position.set(50, 50, 50);
+    scene.add(ambientLight, directionalLight);
 
-    // Add lighting
-    const ambientLight = new THREE.AmbientLight(0x404040, 1.5);
-    const pointLight = new THREE.PointLight(0xffffff, 1.5, 200);
-    pointLight.position.set(30, 30, 30);
-    scene.add(ambientLight, pointLight);
-
-    // Add controls
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
     camera.position.set(20, 15, 20);
     controls.update();
 
-    // Add Earth
-    const earthGroup = new THREE.Group();
     const earthGeometry = new THREE.SphereGeometry(10, 64, 64);
     const earthMaterial = new THREE.MeshStandardMaterial({
       map: new THREE.TextureLoader().load("/assets/Albedo.jpg"),
       bumpMap: new THREE.TextureLoader().load("/assets/Bump.jpg"),
       bumpScale: 0.03,
-      roughnessMap: new THREE.TextureLoader().load("/assets/Ocean.png"),
-      metalnessMap: new THREE.TextureLoader().load("/assets/Ocean.png"),
       emissiveMap: showNightLights
         ? new THREE.TextureLoader().load("/assets/night_lights_modified.png")
         : null,
-      emissive: showNightLights
-        ? new THREE.Color(0xffff88)
-        : new THREE.Color(0x000000),
     });
     const earth = new THREE.Mesh(earthGeometry, earthMaterial);
+    scene.add(earth);
 
-    earthGroup.add(earth);
-    scene.add(earthGroup);
+    const satelliteMeshes: THREE.InstancedMesh = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.1, 16, 16),
+      new THREE.MeshBasicMaterial({ color: 0xff0000 }),
+      satellites.length
+    );
+    scene.add(satelliteMeshes);
 
-    const satelliteMeshes: THREE.Mesh[] = [];
-    const satelliteTrajectories: THREE.Line[] = [];
+    let currentOrbitLine: THREE.Line | null = null; // Track the orbit line
 
-    const addSatellites = async () => {
-      satellites.forEach((satelliteData) => {
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    const handleMouseClick = (event: MouseEvent) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+
+      const intersects = raycaster.intersectObject(satelliteMeshes, true);
+      if (intersects.length > 0) {
+        const instanceId = intersects[0].instanceId;
+        if (instanceId !== undefined) {
+          setSelectedSatellite(satellites[instanceId]);
+
+          // Remove old orbit line if it exists
+          if (currentOrbitLine) {
+            scene.remove(currentOrbitLine);
+            currentOrbitLine.geometry.dispose();
+            currentOrbitLine.material.dispose();
+            currentOrbitLine = null;
+          }
+
+          // Add new orbit line
+          const orbit = calculateOrbit(satellites[instanceId]);
+          scene.add(orbit);
+          currentOrbitLine = orbit;
+        }
+      }
+    };
+
+    const animate = () => {
+      requestAnimationFrame(animate);
+      satellites.forEach((satelliteData, index) => {
         const satrec = satellite.twoline2satrec(
           satelliteData.tle1,
           satelliteData.tle2
         );
-
-        const satelliteGeometry = new THREE.SphereGeometry(0.5, 16, 16);
-        const satelliteMaterial = new THREE.MeshBasicMaterial({
-          color: 0xff0000,
-        });
-        const satelliteMesh = new THREE.Mesh(
-          satelliteGeometry,
-          satelliteMaterial
-        );
-
-        satelliteMesh.userData = { name: satelliteData.name, satrec };
-        scene.add(satelliteMesh);
-        satelliteMeshes.push(satelliteMesh);
-
-        const points: THREE.Vector3[] = [];
-        for (let i = 0; i < 5400; i += 60) {
-          const time = new Date();
-          time.setSeconds(time.getSeconds() + i);
-
-          const positionAndVelocity = satellite.propagate(satrec, time);
-
-          // Skip if propagation fails
-          if (
-            !positionAndVelocity ||
-            positionAndVelocity.position === false ||
-            positionAndVelocity.position === true
-          ) {
-            return;
-          }
-
-          const gmst = satellite.gstime(time);
-          const geodetic = satellite.eciToGeodetic(
-            positionAndVelocity.position,
-            gmst
-          );
-
-          const latitude = (geodetic.latitude * 180) / Math.PI;
-          const longitude = (geodetic.longitude * 180) / Math.PI;
-          const altitude = geodetic.height / 6371;
-
-          const x =
-            (10 + altitude) *
-            Math.cos((latitude * Math.PI) / 180) *
-            Math.cos((longitude * Math.PI) / 180);
-          const y = (10 + altitude) * Math.sin((latitude * Math.PI) / 180);
-          const z =
-            (10 + altitude) *
-            Math.cos((latitude * Math.PI) / 180) *
-            Math.sin((longitude * Math.PI) / 180);
-
-          if (isNaN(x) || isNaN(y) || isNaN(z)) continue;
-
-          points.push(new THREE.Vector3(x, y, z));
-        }
-
-        if (points.length > 0) {
-          const trajectoryGeometry = new THREE.BufferGeometry().setFromPoints(
-            points
-          );
-          const trajectoryMaterial = new THREE.LineBasicMaterial({
-            color: 0x00ff00,
-            transparent: true,
-            opacity: 0.5,
-          });
-          const trajectoryLine = new THREE.Line(
-            trajectoryGeometry,
-            trajectoryMaterial
-          );
-          scene.add(trajectoryLine);
-          satelliteTrajectories.push(trajectoryLine);
-        }
-      });
-      setLoading(false); // Set loading state to false
-    };
-
-    // Animation loop
-    const animate = () => {
-      requestAnimationFrame(animate);
-
-      satelliteMeshes.forEach((mesh) => {
-        const { satrec } = mesh.userData;
-        const now = new Date();
-        const positionAndVelocity = satellite.propagate(satrec, now);
-
-        const gmst = satellite.gstime(now);
+        const positionAndVelocity = satellite.propagate(satrec, simulationTime);
 
         if (
-          positionAndVelocity.position === true ||
-          positionAndVelocity.position === false
-        )
-          return;
+          positionAndVelocity.position &&
+          typeof positionAndVelocity.position !== "boolean"
+        ) {
+          const positionEci = positionAndVelocity.position;
+          const scale = 10 / 6371;
+          const x = positionEci.x * scale;
+          const y = positionEci.y * scale;
+          const z = positionEci.z * scale;
 
-        const geodetic = satellite.eciToGeodetic(
-          positionAndVelocity.position,
-          gmst
-        );
-
-        const latitude = (geodetic.latitude * 180) / Math.PI;
-        const longitude = (geodetic.longitude * 180) / Math.PI;
-        const altitude = geodetic.height / 6371;
-
-        const x =
-          (10 + altitude) *
-          Math.cos((latitude * Math.PI) / 180) *
-          Math.cos((longitude * Math.PI) / 180);
-        const y = (10 + altitude) * Math.sin((latitude * Math.PI) / 180);
-        const z =
-          (10 + altitude) *
-          Math.cos((latitude * Math.PI) / 180) *
-          Math.sin((longitude * Math.PI) / 180);
-
-        mesh.position.set(x, y, z);
+          const matrix = new THREE.Matrix4().setPosition(x, y, z);
+          satelliteMeshes.setMatrixAt(index, matrix);
+        }
       });
+      satelliteMeshes.instanceMatrix.needsUpdate = true;
 
-      earth.rotateY(0.0005);
       controls.update();
       renderer.render(scene, camera);
     };
-    console.log("EHEHEH");
-    addSatellites();
+
     animate();
+    renderer.domElement.addEventListener("click", handleMouseClick);
+
     return () => {
       renderer.dispose();
+      if (currentOrbitLine) {
+        scene.remove(currentOrbitLine);
+        currentOrbitLine.geometry.dispose();
+      }
     };
-  };
+  }, [showNightLights, simulationTime, satellites]);
 
-  useEffect(() => {
-    run();
-  }, []);
+  const calculateOrbit = (satelliteData: {
+    tle1: string;
+    tle2: string;
+  }): THREE.Line => {
+    const satrec = satellite.twoline2satrec(
+      satelliteData.tle1,
+      satelliteData.tle2
+    );
+    const points: THREE.Vector3[] = [];
+
+    const timeForAFullOrbit = (2.0 * Math.PI) / satrec.no; // Time in minutes for a full orbit
+    // Calculate positions over 90 minutes relative to simulationTime
+    for (let i = 0; i < timeForAFullOrbit * 60; i += 60) {
+      const time = new Date(simulationTime.getTime() + i * 1000); // Orbit times relative to simulationTime
+      const positionAndVelocity = satellite.propagate(satrec, time);
+
+      if (
+        positionAndVelocity.position &&
+        typeof positionAndVelocity.position !== "boolean"
+      ) {
+        const positionEci = positionAndVelocity.position;
+
+        // Scale and transform ECI coordinates into the 3D space
+        const scale = 10 / 6371; // Earth radius scaling factor
+        const x = positionEci.x * scale;
+        const y = positionEci.y * scale;
+        const z = positionEci.z * scale;
+
+        points.push(new THREE.Vector3(x, y, z));
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+    return new THREE.Line(geometry, material);
+  };
 
   return (
     <div style={{ height: "100vh", position: "relative" }}>
@@ -231,6 +193,46 @@ const ThreeEarth: React.FC<ThreeEarthProps> = ({ satellites }) => {
       >
         Toggle Night Lights
       </button>
+      <input
+        type="range"
+        min="1"
+        max="100"
+        defaultValue="1"
+        onChange={(e) =>
+          setSimulationTime(
+            new Date(new Date().getTime() + parseInt(e.target.value) * 60000)
+          )
+        }
+        style={{
+          position: "absolute",
+          bottom: "20px",
+          left: "150px",
+          width: "300px",
+        }}
+      />
+      {selectedSatellite && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: "20px",
+            right: "20px",
+            backgroundColor: "white",
+            padding: "10px",
+            borderRadius: "5px",
+          }}
+        >
+          <h3>Satellite Details</h3>
+          <p>
+            <strong>Name:</strong> {selectedSatellite.name}
+          </p>
+          <p>
+            <strong>TLE 1:</strong> {selectedSatellite.tle1}
+          </p>
+          <p>
+            <strong>TLE 2:</strong> {selectedSatellite.tle2}
+          </p>
+        </div>
+      )}
     </div>
   );
 };
